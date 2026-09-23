@@ -1,0 +1,30 @@
+[project]
+name = "ops-intel-mcp"
+version = "0.1.0"
+description = "Read-only MCP server giving Claude access to the Supply Chain Digital Twin (Neo4j + Postgres) and Order Wars (Postgres)."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp>=2.2,<3",
+    "neo4j>=5.20",
+    "psycopg[binary]>=3.2",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.23"]
+
+[project.scripts]
+ops-intel-mcp = "ops_intel_mcp.server:main"
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["ops_intel_mcp*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+markers = ["live: hits the real databases (needs .env); skipped otherwise"]
+addopts = "-m 'not live'"
