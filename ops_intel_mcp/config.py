@@ -31,8 +31,10 @@ class SupportAutomationConfig:
 
 
 def _libpq_url(url: str) -> str:
-    """SQLAlchemy-style URLs (postgresql+psycopg://) -> plain libpq URL."""
-    return url.replace("postgresql+psycopg://", "postgresql://").replace("postgresql+psycopg2://", "postgresql://")
+    """SQLAlchemy-style URLs (postgresql+psycopg://) -> plain libpq URL, minus the
+    Prisma-only `pgbouncer=true` flag that libpq rejects as an unknown parameter."""
+    url = url.replace("postgresql+psycopg://", "postgresql://").replace("postgresql+psycopg2://", "postgresql://")
+    return re.sub(r"([?&])pgbouncer=[^&]*&?", r"\1", url).rstrip("?&")
 
 
 def supply_chain_config() -> SupplyChainConfig | None:

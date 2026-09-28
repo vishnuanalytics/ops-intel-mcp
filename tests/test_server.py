@@ -259,3 +259,14 @@ def test_tenant_pin_must_be_a_full_uuid(monkeypatch):
     monkeypatch.setenv("SUPPORT_AUTOMATION_TENANT_ID", ACME)
     cfg = support_automation_config()
     assert cfg.database_url == "postgresql://u:p@h/db" and cfg.tenant_id == ACME
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("postgresql://u:p@h:6543/postgres?pgbouncer=true", "postgresql://u:p@h:6543/postgres"),
+    ("postgresql://u:p@h/db?pgbouncer=true&sslmode=require", "postgresql://u:p@h/db?sslmode=require"),
+    ("postgresql://u:p@h/db?sslmode=require&pgbouncer=true", "postgresql://u:p@h/db?sslmode=require"),
+])
+def test_prisma_pgbouncer_flag_is_stripped(monkeypatch, raw, expected):
+    monkeypatch.setenv("SUPPORT_AUTOMATION_DATABASE_URL", raw)
+    monkeypatch.delenv("SUPPORT_AUTOMATION_TENANT_ID", raising=False)
+    assert support_automation_config().database_url == expected
