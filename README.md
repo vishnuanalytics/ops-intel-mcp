@@ -1,15 +1,18 @@
 # ops-intel-mcp
 
 A **Model Context Protocol (MCP) server** that gives Claude safe, read-only access
-to two of my projects:
+to three of my projects:
 
 - **[Supply Chain Digital Twin](https://github.com/vishnuanalytics/supply_chain_digital_twin)**:
   a fictional automotive-parts manufacturer, with relationships in **Neo4j** and
   transactions in **Postgres**.
 - **[Order Wars](https://github.com/vishnuanalytics/order-wars)**: a multi-agent LLM
   strategy game, where every AI decision is logged with its rationale and scored by DeepEval.
+- **Support Automation**: a multi-tenant, no-code support automation platform (LangGraph
+  flows, Salesforce cases, a Knowledge Integrity Loop). Its runs, traces and review
+  queue live in **Supabase Postgres**.
 
-Both projects already have their own agent or UI. This server makes their data a
+All three projects already have their own agent or UI. This server makes their data a
 **tool surface that any MCP client can use**, such as Claude Code, Claude Desktop, or
 another agent. Instead of a hard-coded question router, Claude picks the tools, combines
 them, and falls back to its own read-only Cypher/SQL when no purpose-built tool fits.
@@ -23,7 +26,7 @@ terms) and produced a briefing that cites real numbers: 11 turns, 43 s, $0.22.*
 
 ---
 
-## Tools (12, all read-only)
+## Tools (21, all read-only)
 
 | Tool | What it answers |
 |---|---|
@@ -39,6 +42,22 @@ terms) and produced a briefing that cites real numbers: 11 turns, 43 s, $0.22.*
 | `order_wars_game_summary` | Final faction states, wars/alliances/truces, action mix, DeepEval averages |
 | `order_wars_game_events` | Every decision with the agent's own rationale, the rules engine's resolution, **that decision's DeepEval scores** and the judge's reasoning |
 | `order_wars_role_preset_scores` | How each AI personality scores across all evaluated games |
+| `support_automation_list_tenants` | Tenants with plan, billing status, case connector, flow count, 30-day runs, last run |
+| `support_automation_list_flows` | Flows per tenant: draft/published, current vs published version, runs, webhook/schedule triggers |
+| `support_automation_outcome_stats` | Per flow: how runs ended (auto_reply / ask_human / handover …), what humans did with drafts, **share of reviewed drafts sent unchanged**, avg gate confidence and edit distance |
+| `support_automation_recent_runs` | Recent runs filtered by tenant, outcome, flow, or human action |
+| `support_automation_run_detail` | One run end to end: gate breakdown, each node step with latency and model, retrieved KB passages, the AI draft vs what the human sent, correction analysis, tokens |
+| `support_automation_case_timeline` | A Salesforce case's history (routing, gate, pings, reassignments, sends, SLA breaches) plus every run for it |
+| `support_automation_knowledge_reviews` | Knowledge Integrity Loop tasks: statement, contradiction verdict, reviewer decision, KB write-back status |
+| `support_automation_token_usage` | Runs and tokens per tenant vs plan allowance, per model, per day |
+| `support_automation_system_health` | Heartbeats of the poller, worker, Slack bot, CDC listener and Neo4j sync |
+
+Support Automation deliberately has **no ad-hoc SQL tool**. That database holds
+credentials (`connections.auth`, `tenant_integrations.secret`, webhook trigger tokens),
+and a direct connection bypasses the app's row-level security. So every query is
+purpose-built, never selects those columns (a test asserts this), and filters by tenant
+itself. Set `SUPPORT_AUTOMATION_TENANT_ID` to pin the server to one tenant; other
+tenants are then refused, not just hidden.
 
 Every tool is annotated `readOnlyHint: true, destructiveHint: false`. Each backend
 is optional: its tools are only registered when its connection settings are present.
@@ -66,21 +85,25 @@ flowchart TB
     end
 
     subgraph Server["ops-intel-mcp · stdio"]
-        T["12 read-only tools<br/>typed args, validated by the SDK"]
+        T["21 read-only tools<br/>typed args, validated by the SDK"]
         SC["SupplyChain<br/>deterministic analyses +<br/>guarded ad-hoc Cypher/SQL"]
         OW["OrderWars<br/>games · decisions · evals"]
+        SA["SupportAutomation<br/>runs · traces · cases · KIL<br/>tenant-scoped, no ad-hoc SQL"]
         T --> SC
         T --> OW
+        T --> SA
     end
 
     N4J[("Neo4j Aura<br/>supply chain graph")]
     PG1[("Postgres<br/>inventory · contracts · POs")]
     PG2[("Postgres<br/>order_wars schema")]
+    PG3[("Supabase Postgres<br/>support automation")]
 
     Clients <-->|"MCP over stdio"| T
     SC -->|"read transaction"| N4J
     SC -->|"READ ONLY txn, rolled back"| PG1
     OW -->|"READ ONLY txn, rolled back"| PG2
+    SA -->|"READ ONLY txn, rolled back"| PG3
 ```
 
 ### Read-only by construction
@@ -141,6 +164,8 @@ Add to `claude_desktop_config.json`:
 | `NEO4J_URI`, `NEO4J_USERNAME`, `NEO4J_PASSWORD`, `SUPPLY_CHAIN_POSTGRES_URL` | the `supply_chain_*` tools (all four required) |
 | `SUPPLY_CHAIN_REFERENCE_DATE` | "today" for contract-expiry maths on the seeded demo data (default: the real date) |
 | `ORDER_WARS_DATABASE_URL`, `ORDER_WARS_SCHEMA` | the `order_wars_*` tools |
+| `SUPPORT_AUTOMATION_DATABASE_URL` | the `support_automation_*` tools (Supabase → Connect → session pooler URI) |
+| `SUPPORT_AUTOMATION_TENANT_ID` | optional: pin every support-automation tool to this one tenant UUID |
 | `OPS_INTEL_ENV_FILE` | an explicit `.env` path (otherwise `./.env`, then the repo's `.env`) |
 
 Use a read-only database role if you have one. The server doesn't need write access.
@@ -150,8 +175,8 @@ Use a read-only database role if you have one. The server doesn't need write acc
 ## Tests
 
 ```bash
-.venv/bin/pytest            # 31 offline tests: no network, no credentials
-.venv/bin/pytest -m live    # 9 tests against the real databases (needs .env)
+.venv/bin/pytest            # 40 offline tests: no network, no credentials
+.venv/bin/pytest -m live    # 11 tests against the real databases (needs .env)
 ```
 
 - **Offline:** the guard (reads allowed, writes and multi-statement queries
@@ -159,7 +184,9 @@ Use a read-only database role if you have one. The server doesn't need write acc
   end through the real MCP `Client` over its in-process transport, with fake databases:
   tool listing and annotations, disruption maths and risk levels, clean errors for
   ambiguous names, argument validation before any query runs, truncation, game-id
-  prefix resolution.
+  prefix resolution. For Support Automation: no query touches a credential column,
+  a pinned tenant can't be escaped, per-flow outcome roll-ups are right, and bad
+  outcome values are rejected before any query.
 - **Live:** answers checked against the Supply Chain twin's own eval set
   (e.g. Titan Aluminum → RM3 + RM4 → P1–P5). Also the database-enforced write rejection
   described above, per-decision eval scores on the Order Wars demo game, and the real

@@ -13,16 +13,18 @@ from mcp import Client, StdioServerParameters
 
 load_dotenv()
 
-from ops_intel_mcp.config import order_wars_config, supply_chain_config  # noqa: E402
+from ops_intel_mcp.config import order_wars_config, supply_chain_config, support_automation_config  # noqa: E402
 from ops_intel_mcp.order_wars import OrderWars  # noqa: E402
 from ops_intel_mcp.readonly import Neo4jReader, PostgresReader  # noqa: E402
 from ops_intel_mcp.server import build_server  # noqa: E402
 from ops_intel_mcp.supply_chain import SupplyChain  # noqa: E402
+from ops_intel_mcp.support_automation import SupportAutomation  # noqa: E402
 
 pytestmark = pytest.mark.live
-SC_CFG, OW_CFG = supply_chain_config(), order_wars_config()
+SC_CFG, OW_CFG, SA_CFG = supply_chain_config(), order_wars_config(), support_automation_config()
 needs_sc = pytest.mark.skipif(SC_CFG is None, reason="supply chain not configured")
 needs_ow = pytest.mark.skipif(OW_CFG is None, reason="order wars not configured")
+needs_sa = pytest.mark.skipif(SA_CFG is None, reason="support automation not configured")
 
 
 @pytest.fixture(scope="module")
@@ -118,7 +120,8 @@ async def test_stdio_end_to_end():
     )
     async with Client(params) as client:
         names = {t.name for t in (await client.list_tools()).tools}
-        assert len(names) == 12
+        expected = 12 + (9 if SA_CFG else 0)
+        assert len(names) == expected
         res = await client.call_tool("supply_chain_supplier_disruption_impact", {"supplier": "S2", "delay_days": 21})
         assert not res.is_error and res.structured_content["supplier"]["id"] == "S2"
         res = await client.call_tool("supply_chain_readonly_sql", {"query": "DROP TABLE contracts"})
@@ -130,3 +133,36 @@ async def test_in_process_server_with_real_backends(sc, ow):
     async with Client(build_server(sc, ow)) as client:
         res = await client.call_tool("order_wars_game_summary", {"game_id": "568d753f"})
         assert not res.is_error and len(res.structured_content["factions"]) == 4
+
+
+@pytest.fixture(scope="module")
+def sa():
+    sql = PostgresReader(SA_CFG.database_url)
+    yield SupportAutomation(sql, SA_CFG.tenant_id)
+    sql.close()
+
+
+@needs_sa
+def test_support_automation_tools_run_against_the_real_schema(sa):
+    tenants = sa.list_tenants()
+    assert tenants and all(t["tenant_id"] and t["name"] for t in tenants)
+    stats = sa.outcome_stats(days=365)["flows"]
+    assert stats and all(sum(f["outcomes"].values()) == f["runs"] for f in stats)
+    runs = sa.recent_runs(days=365, limit=5)["runs"]
+    assert runs
+    detail = sa.run_detail(runs[0]["run_id"][:8])
+    assert detail["run_id"] == runs[0]["run_id"] and isinstance(detail["steps"], list)
+    assert sa.token_usage(days=365)["by_tenant"]
+    assert {h["component"] for h in sa.system_health()}
+    sa.list_flows()
+    sa.knowledge_reviews()
+
+
+@needs_sa
+def test_support_automation_database_rejects_a_write(sa):
+    import psycopg
+
+    with pytest.raises(psycopg.errors.ReadOnlySqlTransaction):
+        sa.sql.query("CREATE TABLE mcp_write_probe (x int)")
+    rows, _ = sa.sql.query("SELECT to_regclass('public.mcp_write_probe') AS t")
+    assert rows == [{"t": None}]

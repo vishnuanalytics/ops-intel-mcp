@@ -103,7 +103,9 @@ class PostgresReader:
         import psycopg
         from psycopg.rows import dict_row
 
-        return psycopg.connect(self._url, row_factory=dict_row, connect_timeout=15)
+        # prepare_threshold=None: no server-side prepared statements, which a
+        # transaction-mode pooler (Supabase :6543, pgbouncer) can't keep per client.
+        return psycopg.connect(self._url, row_factory=dict_row, connect_timeout=15, prepare_threshold=None)
 
     def query(self, sql: str, params: dict | tuple | None = None, max_rows: int = 200) -> tuple[list[dict], bool]:
         """Returns (rows, truncated). Caller-facing SQL must pass the guard first;
