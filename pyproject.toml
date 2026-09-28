@@ -1,7 +1,7 @@
 [project]
 name = "ops-intel-mcp"
 version = "0.1.0"
-description = "Read-only MCP server giving Claude access to the Supply Chain Digital Twin (Neo4j + Postgres) and Order Wars (Postgres)."
+description = "Read-only MCP server giving Claude access to the Supply Chain Digital Twin (Neo4j + Postgres), Order Wars (Postgres) and Support Automation (Supabase Postgres)."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

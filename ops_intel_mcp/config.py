@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+import re
 from dataclasses import dataclass
 
 
@@ -23,6 +24,17 @@ class OrderWarsConfig:
     schema: str = "order_wars"
 
 
+@dataclass(frozen=True)
+class SupportAutomationConfig:
+    database_url: str
+    tenant_id: str | None = None  # pin every tool to this one tenant
+
+
+def _libpq_url(url: str) -> str:
+    """SQLAlchemy-style URLs (postgresql+psycopg://) -> plain libpq URL."""
+    return url.replace("postgresql+psycopg://", "postgresql://").replace("postgresql+psycopg2://", "postgresql://")
+
+
 def supply_chain_config() -> SupplyChainConfig | None:
     uri, pw, pg = os.getenv("NEO4J_URI"), os.getenv("NEO4J_PASSWORD"), os.getenv("SUPPLY_CHAIN_POSTGRES_URL")
     if not (uri and pw and pg):
@@ -36,6 +48,14 @@ def order_wars_config() -> OrderWarsConfig | None:
     url = os.getenv("ORDER_WARS_DATABASE_URL")
     if not url:
         return None
-    # SQLAlchemy-style URLs (postgresql+psycopg://) -> plain libpq URL
-    url = url.replace("postgresql+psycopg://", "postgresql://").replace("postgresql+psycopg2://", "postgresql://")
-    return OrderWarsConfig(url, os.getenv("ORDER_WARS_SCHEMA", "order_wars"))
+    return OrderWarsConfig(_libpq_url(url), os.getenv("ORDER_WARS_SCHEMA", "order_wars"))
+
+
+def support_automation_config() -> SupportAutomationConfig | None:
+    url = os.getenv("SUPPORT_AUTOMATION_DATABASE_URL")
+    if not url:
+        return None
+    tenant = os.getenv("SUPPORT_AUTOMATION_TENANT_ID") or None
+    if tenant and not re.fullmatch(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", tenant):
+        raise ValueError(f"SUPPORT_AUTOMATION_TENANT_ID must be a full tenant UUID, got {tenant!r}")
+    return SupportAutomationConfig(_libpq_url(url), tenant)
